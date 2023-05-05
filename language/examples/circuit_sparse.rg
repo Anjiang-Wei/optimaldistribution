@@ -1,4 +1,4 @@
--- Copyright 2023 Stanford University
+-- Copyright 2021 Stanford University
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
@@ -56,7 +56,8 @@ do
   local cxx = os.getenv('CXX') or 'c++'
 
   local cxx_flags = os.getenv('CXXFLAGS') or ''
-  cxx_flags = cxx_flags .. " -O2 -Wall -Werror"
+  -- cxx_flags = cxx_flags .. " -O2 -Wall -Werror"
+  cxx_flags = cxx_flags .. " -O2 -Wall"
   if os.execute('test "$(uname)" = Darwin') == 0 then
     cxx_flags =
       (cxx_flags ..
@@ -145,8 +146,6 @@ fspace wire(rpn : region(node),
 }
 
 fspace timestamp {
-  init_start : int64,
-  init_stop : int64,
   start : int64,
   stop : int64,
 }
@@ -518,8 +517,7 @@ do
 end
 
 __demand(__cuda)
-task update_voltages(init_ts : bool,
-                     print_ts : bool,
+task update_voltages(print_ts : bool,
                      rpn : region(node),
                      rsn : region(node),
                      rt : region(timestamp))
@@ -540,14 +538,9 @@ do
     node.charge = 0.0
   end
 
-  if init_ts or print_ts then
+  if print_ts then
     var t = c.legion_get_current_time_in_micros()
-    if init_ts then
-      for x in rt do x.init_stop = t end
-    end
-    if print_ts then
-      for x in rt do x.stop = t end
-    end
+    for x in rt do x.stop = t end
   end
 end
 
@@ -638,7 +631,8 @@ do
       c.legion_ptr_t { value = range.rect.hi })
   end
 
-  return partition(aliased, all_shared, ghost_node_map, ghost_ranges.ispace)
+  var rp_ghost = partition(aliased, all_shared, ghost_node_map, ghost_ranges.ispace)
+  return rp_ghost
 end
 
 task parse_input(conf : Config)
@@ -670,32 +664,21 @@ task parse_input(conf : Config)
   return conf
 end
 
-task begin_init(rt : region(timestamp))
-where writes(rt) do
-  var t = c.legion_get_current_time_in_micros()
-  for x in rt do x.init_start = t end
-end
-
 task get_elapsed(all_times : region(timestamp))
 where reads(all_times) do
-  var init_start = [int64:max()]
-  var init_stop = [int64:min()]
   var start = [int64:max()]
   var stop = [int64:min()]
 
   for t in all_times do
-    init_start min= t.init_start
-    init_stop max= t.init_stop
     start min= t.start
     stop max= t.stop
   end
 
-  return { init_time = 1e-6 * (init_stop - init_start), sim_time = 1e-6 * (stop - start) }
+  return 1e-6 * (stop - start)
 end
 
-task print_summary(color : int, init_time : double, sim_time : double, conf : Config)
+task print_summary(color : int, sim_time : double, conf : Config)
   if color == 0 then
-    format.println("INIT TIME = {7.3} s", init_time)
     format.println("ELAPSED TIME = {7.3} s", sim_time)
 
     -- Compute the floating point operations per second
@@ -743,29 +726,20 @@ task toplevel()
   var num_circuit_nodes : uint64 = num_pieces * conf.nodes_per_piece
   var num_circuit_wires : uint64 = num_pieces * conf.wires_per_piece
 
-  var launch_domain = ispace(ptr, num_superpieces)
-  var all_times = region(ispace(ptr, num_superpieces), timestamp)
-  fill(all_times.{init_start, init_stop, start, stop}, 0)
-  var rp_times = partition(equal, all_times, launch_domain)
-
-  __fence(__execution, __block)
-  __demand(__index_launch)
-  for i in launch_domain do
-    begin_init(rp_times[i])
-  end
-  __fence(__execution, __block)
-
   var all_nodes = region(ispace(ptr, num_circuit_nodes), node)
   var all_wires = region(ispace(ptr, num_circuit_wires), wire(wild, wild, wild))
+  var all_times = region(ispace(ptr, num_superpieces), timestamp)
 
   fill(all_nodes.{node_cap, leakage, charge, node_voltage}, 0.0)
   fill(all_wires.{inductance, resistance, wire_cap, current.{_0, _1, _2, _3, _4, _5, _6, _7, _8, _9}, voltage.{_0, _1, _2, _3, _4, _5, _6, _7, _8}}, 0.0)
+  fill(all_times.{start, stop}, 0)
 
   var colorings = create_colorings(conf)
   var rp_all_nodes = partition(disjoint, all_nodes, colorings.privacy_map, ispace(ptr, 2))
   var all_private = rp_all_nodes[0]
   var all_shared = rp_all_nodes[1]
 
+  var launch_domain = ispace(ptr, num_superpieces)
   var rp_private = partition(disjoint, all_private, colorings.private_node_map, launch_domain)
   var rp_shared = partition(disjoint, all_shared, colorings.shared_node_map, launch_domain)
   var rp_wires = partition(equal, all_wires, launch_domain)
@@ -775,9 +749,11 @@ task toplevel()
 
   fill(ghost_ranges.rect, rect1d { 0, 0 })
 
+  var rp_times = partition(equal, all_times, launch_domain)
+
   for j = 0, 1 do
     __demand(__index_launch)
-    for i in launch_domain do
+    for i = 0, num_superpieces do
       init_piece(conf, rp_ghost_ranges[i],
                  rp_private[i], rp_shared[i], all_shared, rp_wires[i])
     end
@@ -787,7 +763,7 @@ task toplevel()
 
   __demand(__spmd)
   for j = 0, 1 do
-    for i in launch_domain do
+    for i = 0, num_superpieces do
       init_pointers(rp_private[i], rp_shared[i], rp_ghost[i], rp_wires[i])
     end
   end
@@ -807,12 +783,12 @@ task toplevel()
       distribute_charge(rp_private[i], rp_shared[i], rp_ghost[i], rp_wires[i])
     end
     for i in launch_domain do
-      update_voltages(j == 0, j == num_loops - prune - 1, rp_private[i], rp_shared[i], rp_times[i])
+      update_voltages(j == num_loops - prune - 1, rp_private[i], rp_shared[i], rp_times[i])
     end
   end
 
-  var { init_time, sim_time } = get_elapsed(all_times)
-  for i = 0, num_superpieces do print_summary(i, init_time, sim_time, conf) end
+  var sim_time = get_elapsed(all_times)
+  for i = 0, num_superpieces do print_summary(i, sim_time, conf) end
 end
 
 else -- not use_python_main
@@ -833,7 +809,7 @@ if os.getenv('SAVEOBJ') == '1' then
   end
 
   local exe = os.getenv('OBJNAME') or "circuit"
-  regentlib.saveobj(toplevel, exe, "executable", cmapper.register_mappers, link_flags)
+  regentlib.saveobj(toplevel, exe, "executable", cmapper.register_mappers2, link_flags)
 else
-  regentlib.start(toplevel, cmapper.register_mappers)
+  regentlib.start(toplevel, cmapper.register_mappers2)
 end
