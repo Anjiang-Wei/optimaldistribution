@@ -243,6 +243,9 @@ do
   if window * 2 < num_neighbors then
     window = (num_neighbors + 1) / 2
   end
+  
+  format.println("window = {}, num_neighbors = {}, num_shared_nodes = {}, pps = {}",
+                window, num_neighbors, num_shared_nodes, pps);
 
   var piece_shared_nodes = [&uint](c.malloc([sizeof(uint)] * num_pieces))
   var neighbor_ids : &uint = [&uint](c.malloc([sizeof(uint)] * num_neighbors))
@@ -254,6 +257,7 @@ do
   var offset = spiece_id * pps * conf.wires_per_piece
 
   for piece_id = spiece_id * pps, (spiece_id + 1) * pps do
+    format.println("========spiece_id = {}, pps = {}, piece_id = {}=========", spiece_id, pps, piece_id);
     var pn_ptr_offset = piece_id * pnpp + num_shared_nodes
     var sn_ptr_offset = piece_id * snpp
 
@@ -322,6 +326,7 @@ do
       else
         in_node += pn_ptr_offset - snpp
       end
+      format.println("in_node = {}", in_node);
 
       wire.in_ptr = dynamic_cast(ptr(node, rpn, rsn), ptr(in_node))
       regentlib.assert(not isnull(wire.in_ptr), "picked an invalid random pointer")
@@ -329,11 +334,14 @@ do
       var out_node = 0
       if (100 * drand48() < conf.pct_wire_in_piece) or (conf.num_pieces == 1) then
         out_node = [uint](drand48() * npp)
+        format.println("in_piece = True, random_init out_node = {} from npp = {}, snpp = {}, pnpp = {}, sn_ptr_offset = {}, pn_ptr_offset = {}",
+                      out_node, npp, snpp, pnpp, sn_ptr_offset, pn_ptr_offset);
         if out_node < snpp then
           out_node += sn_ptr_offset
         else
           out_node += pn_ptr_offset - snpp
         end
+        format.println("in_piece = True, out_node = {}", out_node);
       else
         ---- pick a random other piece and a node from there
         --var pp = [uint](drand48() * (conf.num_pieces - 1))
@@ -341,6 +349,8 @@ do
 
         var pp = neighbor_ids[ [uint](drand48() * num_neighbors) ]
         var idx = [uint](drand48() * snpp)
+        format.println("in_piece = False, random_init pp = {} from num_neighbors = {}, random_init idx = {} from snpp = {}",
+                    pp, num_neighbors, idx, snpp);
         if idx >= piece_shared_nodes[pp] then
           idx = piece_shared_nodes[pp]
           if piece_shared_nodes[pp] < snpp then
@@ -350,6 +360,8 @@ do
         out_node = pp * snpp + idx
         max_shared_node_id = max(max_shared_node_id, out_node)
         min_shared_node_id = min(min_shared_node_id, out_node)
+        format.println("in_piece = False, updated idx = {}, finally out_node = {}, max_shared_node_id = {}, min_shared_node_id = {}",
+                      idx, out_node, max_shared_node_id, min_shared_node_id);
       end
       wire.out_ptr = dynamic_cast(ptr(node, rpn, rsn, all_shared), ptr(out_node))
     end
@@ -604,6 +616,8 @@ task create_colorings(conf : Config)
   var num_superpieces = conf.num_pieces / pps
   var snpp = conf.shared_nodes_per_piece
   var pnpp = conf.nodes_per_piece - snpp
+  -- format.println("snpp = {}, pnpp = {}, pps = {}, num_superpieces = {}, num_shared_nodes = {}, num_circuit_nodes = {}", 
+  --                 snpp, pnpp, pps, num_superpieces, num_shared_nodes, num_circuit_nodes)
   for spiece_id = 0, num_superpieces do
     c.legion_point_coloring_add_range(coloring.shared_node_map, ptr(spiece_id),
       c.legion_ptr_t { value = spiece_id * snpp * pps },
