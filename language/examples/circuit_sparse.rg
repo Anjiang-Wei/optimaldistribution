@@ -248,8 +248,8 @@ do
                 window, num_neighbors, num_shared_nodes, pps);
 
   var piece_shared_nodes = [&uint](c.malloc([sizeof(uint)] * num_pieces))
-  var neighbor_ids : &uint = [&uint](c.malloc([sizeof(uint)] * num_neighbors))
-  var alread_picked : &bool = [&bool](c.malloc([sizeof(bool)] * num_pieces))
+  -- var neighbor_ids : &uint = [&uint](c.malloc([sizeof(uint)] * num_neighbors))
+  -- var alread_picked : &bool = [&bool](c.malloc([sizeof(bool)] * num_pieces))
 
   var max_shared_node_id = 0
   var min_shared_node_id = num_shared_nodes * pps
@@ -275,21 +275,21 @@ do
 
     for i = 0, num_pieces do
       piece_shared_nodes[i] = 0
-      alread_picked[i] = false
+      -- alread_picked[i] = false
     end
 
     var window_size = end_piece_id - start_piece_id + 1
     regentlib.assert(start_piece_id >= 0, "wrong start piece id")
     regentlib.assert(end_piece_id < num_pieces, "wrong end piece id")
     regentlib.assert(start_piece_id <= end_piece_id, "wrong neighbor range")
-    for i = 0, num_neighbors do
-      var neighbor_id = [uint](drand48() * window_size + start_piece_id)
-      while neighbor_id == piece_id or alread_picked[neighbor_id] do
-        neighbor_id = [uint](drand48() * window_size + start_piece_id)
-      end
-      alread_picked[neighbor_id] = true
-      neighbor_ids[i] = neighbor_id
-    end
+    -- for i = 0, num_neighbors do
+    --   var neighbor_id = [uint](drand48() * window_size + start_piece_id)
+    --   while neighbor_id == piece_id or alread_picked[neighbor_id] do
+    --     neighbor_id = [uint](drand48() * window_size + start_piece_id)
+    --   end
+    --   alread_picked[neighbor_id] = true
+    --   neighbor_ids[i] = neighbor_id
+    -- end
 
     for wire_id = 0, conf.wires_per_piece do
       var wire =
@@ -347,10 +347,14 @@ do
         --var pp = [uint](drand48() * (conf.num_pieces - 1))
         --if pp >= piece_id then pp += 1 end
 
-        var pp = neighbor_ids[ [uint](drand48() * num_neighbors) ]
+        -- var pp = neighbor_ids[ [uint](drand48() * num_neighbors) ]
+        -- !!!!
+        -- pick the other piece in a cyclic manner instead of a neighbor manner
+        var spiece_distance = 2;
+        var pp = (piece_id + spiece_distance * pps) % num_pieces;
         var idx = [uint](drand48() * snpp)
-        format.println("in_piece = False, random_init pp = {} from num_neighbors = {}, random_init idx = {} from snpp = {}",
-                    pp, num_neighbors, idx, snpp);
+        format.println("in_piece = False, piece_id = {}, pp = {} from num_neighbors = {}, random_init idx = {} from snpp = {}",
+                        piece_id, pp, num_neighbors, idx, snpp);
         if idx >= piece_shared_nodes[pp] then
           idx = piece_shared_nodes[pp]
           if piece_shared_nodes[pp] < snpp then
@@ -374,8 +378,8 @@ do
   end
 
   c.free(piece_shared_nodes)
-  c.free(neighbor_ids)
-  c.free(alread_picked)
+  -- c.free(neighbor_ids)
+  -- c.free(alread_picked)
 end
 
 task init_piece(-- spiece_id   : int,
